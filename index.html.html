@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>내 F1 대시보드</title>
+<style>
+  /* ===== CSS: 색과 모양 ===== */
+  :root {
+    --bg: #f5f5f3; --card: #ffffff; --text: #1a1a1c; --muted: #6b6b70;
+    --line: #e2e2de; --red: #e10600;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #151517; --card: #1f1f22; --text: #f0f0f0; --muted: #9a9aa0; --line: #333338; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font-family: system-ui, -apple-system, "Apple SD Gothic Neo", "Malgun Gothic", sans-serif; }
+  header { border-top: 6px solid var(--red); padding: 24px 20px 8px; max-width: 760px; margin: 0 auto; }
+  h1 { margin: 0; font-size: 1.6rem; }
+  #sub { color: var(--muted); margin: 4px 0 0; font-size: .9rem; }
+  nav { max-width: 760px; margin: 12px auto 0; padding: 0 20px; display: flex; gap: 8px; }
+  nav button { border: 1px solid var(--line); background: var(--card); color: var(--text);
+               padding: 8px 14px; border-radius: 8px; cursor: pointer; font-size: .95rem; }
+  nav button.on { background: var(--red); color: #fff; border-color: var(--red); }
+  nav button:focus-visible { outline: 2px solid var(--red); outline-offset: 2px; }
+  main { max-width: 760px; margin: 12px auto 40px; padding: 0 20px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { padding: 10px 14px; text-align: left; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  th { color: var(--muted); font-weight: 500; font-size: .85rem; }
+  tr:last-child td { border-bottom: 0; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  td.pos { font-weight: 700; width: 3em; }
+  tr:first-child td.pos { color: var(--red); }
+  .next { padding: 24px; }
+  .next .round { color: var(--muted); font-size: .9rem; }
+  .next h2 { margin: 4px 0 12px; font-size: 1.5rem; }
+  .next .when { font-size: 1.2rem; font-weight: 600; }
+  .next .count { color: var(--red); font-weight: 600; margin-top: 8px; }
+  .msg { padding: 24px; color: var(--muted); }
+  pre { padding: 16px; margin: 0; overflow: auto; font-size: .8rem; }
+</style>
+</head>
+<body>
+<header>
+  <h1>내 F1 대시보드</h1>
+  <p id="sub">데이터를 불러오는 중...</p>
+</header>
+<nav id="tabs">
+  <button data-tab="drivers" class="on">드라이버</button>
+  <button data-tab="teams">팀</button>
+  <button data-tab="next">다음 경기</button>
+</nav>
+<main><div id="view" class="card"><div class="msg">불러오는 중...</div></div></main>
+
+<script>
+  // ===== JavaScript: 데이터를 가져와서 화면에 채우기 =====
+  const BASE = "https://f1api.dev/api";
+
+  // 각 탭이 쓰는 API 주소 (문서와 다르면 여기만 고치면 됩니다)
+  const URLS = {
+    drivers: BASE + "/current/drivers-championship",
+    teams:   BASE + "/current/constructors-championship",
+    next:    BASE + "/current/next",
+  };
+
+  const view = document.getElementById("view");
+  const sub = document.getElementById("sub");
+  const memory = {};    // 이번에 받은 데이터 (메모리)
+  const pending = {};   // 지금 요청 중인 것 (같은 요청을 두 번 보내지 않기 위해)
+
+  // 마지막으로 저장해둔 데이터 꺼내기 (메모리 → 브라우저 저장소 순서)
+  function getSaved(key) {
+    if (memory[key]) return memory[key];
+    try {
+      const s = localStorage.getItem("f1:" + key);
+      return s ? JSON.parse(s) : null;
+    } catch (e) { return null; }
+  }
+
+  // API에서 최신 JSON 받아오고, 브라우저에도 저장해두기
+  async function fetchFresh(key) {
+    const res = await fetch(URLS[key]);
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    const data = await res.json();
+    memory[key] = data;
+    try { localStorage.setItem("f1:" + key, JSON.stringify(data)); } catch (e) {}
+    return data;
+  }
+
+  // 같은 데이터를 이미 요청 중이면 그걸 재사용
+  function refresh(key) {
+    if (!pending[key]) pending[key] = fetchFresh(key).finally(() => delete pending[key]);
+    return pending[key];
+  }
+
+  // 데이터 모양이 예상과 다를 때, 원본을 그대로 보여주기 (고치는 데 도움이 됩니다)
+  function showRaw(data, note) {
+    view.innerHTML = '<div class="msg">' + note + '</div><pre></pre>';
+    view.querySelector("pre").textContent = JSON.stringify(data, null, 2);
+  }
+
+  // 드라이버 순위표
+  function renderDrivers(data) {
+    const rows = data.drivers_championship;
+    if (!Array.isArray(rows)) return showRaw(data, "예상과 다른 데이터 모양입니다. 아래 원본을 보고 필드 이름을 맞춰주세요.");
+    sub.textContent = data.season ? data.season + " 시즌 드라이버 순위" : "드라이버 순위";
+    view.innerHTML = "<table><thead><tr><th>순위</th><th>드라이버</th><th>팀</th>" +
+      '<th class="num">승</th><th class="num">점수</th></tr></thead><tbody>' +
+      rows.map(r => {
+        const d = r.driver || {};
+        const name = ((d.name || "") + " " + (d.surname || "")).trim() || r.driverId;
+        const team = (r.team && r.team.teamName) || r.teamId || "";
+        return `<tr><td class="pos">${r.position}</td><td>${name}</td><td>${team}</td>` +
+               `<td class="num">${r.wins ?? "-"}</td><td class="num">${r.points}</td></tr>`;
+      }).join("") + "</tbody></table>";
+  }
+
+  // 팀(컨스트럭터) 순위표
+  function renderTeams(data) {
+    const rows = data.constructors_championship;
+    if (!Array.isArray(rows)) return showRaw(data, "예상과 다른 데이터 모양입니다. 아래 원본을 보고 필드 이름을 맞춰주세요.");
+    sub.textContent = data.season ? data.season + " 시즌 팀 순위" : "팀 순위";
+    view.innerHTML = "<table><thead><tr><th>순위</th><th>팀</th>" +
+      '<th class="num">승</th><th class="num">점수</th></tr></thead><tbody>' +
+      rows.map(r => {
+        const team = (r.team && r.team.teamName) || r.teamId || "";
+        return `<tr><td class="pos">${r.position}</td><td>${team}</td>` +
+               `<td class="num">${r.wins ?? "-"}</td><td class="num">${r.points}</td></tr>`;
+      }).join("") + "</tbody></table>";
+  }
+
+  // 다음 경기 (한국 시간으로 변환)
+  function renderNext(data) {
+    const race = Array.isArray(data.race) ? data.race[0] : null;
+    const date = race && race.schedule && race.schedule.race && race.schedule.race.date;
+    if (!race || !date) return showRaw(data, "예상과 다른 데이터 모양입니다. 아래 원본을 보고 필드 이름을 맞춰주세요.");
+    const time = race.schedule.race.time || "00:00:00Z";
+    const start = new Date(date + "T" + time);   // 시간 끝의 Z는 UTC라는 뜻
+    const kst = start.toLocaleString("ko-KR", {
+      timeZone: "Asia/Seoul", year: "numeric", month: "long", day: "numeric",
+      weekday: "long", hour: "2-digit", minute: "2-digit"
+    });
+    const days = Math.ceil((start - new Date()) / 86400000);
+    const c = race.circuit || {};
+    sub.textContent = "다음 경기 일정";
+    view.innerHTML = `<div class="next">
+      <div class="round">${data.season || ""} 시즌 ${data.round || race.round || ""}라운드</div>
+      <h2>${race.raceName || "다음 그랑프리"}</h2>
+      <div>${[c.circuitName, c.city, c.country].filter(Boolean).join(", ")}</div>
+      <div class="when">${isNaN(start) ? date : kst + " (한국 시간)"}</div>
+      <div class="count">${isNaN(start) ? "" : (days > 0 ? "D-" + days : "오늘 또는 진행 중")}</div>
+    </div>`;
+  }
+
+  const renderers = { drivers: renderDrivers, teams: renderTeams, next: renderNext };
+
+  // 탭 전환
+  let current = "drivers";   // 지금 보고 있는 탭
+
+  async function show(tab) {
+    current = tab;
+    // 1) 저장해둔 데이터가 있으면 즉시 보여주기
+    const saved = getSaved(tab);
+    if (saved) renderers[tab](saved);
+    else view.innerHTML = '<div class="msg">불러오는 중...</div>';
+
+    // 2) 뒤에서 최신 데이터를 받아 와서 교체하기
+    try {
+      const fresh = await refresh(tab);
+      if (current === tab) renderers[tab](fresh);
+    } catch (e) {
+      if (!saved && current === tab) {
+        view.innerHTML = '<div class="msg">데이터를 불러오지 못했습니다 (' + e.message +
+          '). 인터넷 연결과 API 주소를 확인해 보세요.</div>';
+      }
+    }
+  }
+
+  document.getElementById("tabs").addEventListener("click", e => {
+    const btn = e.target.closest("button");
+    if (!btn) return;
+    document.querySelectorAll("#tabs button").forEach(b => b.classList.toggle("on", b === btn));
+    show(btn.dataset.tab);
+  });
+
+  // 세 탭의 데이터를 처음부터 동시에 요청해두기 (오류는 탭을 열 때 처리)
+  Object.keys(URLS).forEach(k => refresh(k).catch(() => {}));
+  show("drivers");
+</script>
+</body>
+</html>
